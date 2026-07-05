@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>VRM 十字ビューア</title>
+<style>
+  :root{
+    --accent:#5b9dff;
+    --text:#eee;
+    --muted:#8a8a90;
+    --panel:#151517;
+    --panel-line:#26262a;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:#0a0a0c;color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif;
+    height:100%;overflow:hidden;}
+  #app{display:flex;flex-direction:column;height:100%;}
+
+  header{
+    padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--panel-line);
+    display:flex;flex-wrap:wrap;align-items:center;gap:16px;
+  }
+  h1{font-size:14px;font-weight:600;margin:0 8px 0 0;color:#fff;letter-spacing:.02em;white-space:nowrap;}
+
+  .file-btn{
+    background:#232327;color:#fff;border:1px solid #333;
+    padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;
+  }
+  .file-btn:hover{background:#2b2b30;}
+  input[type=file]{display:none;}
+
+  .toggle-wrap{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);white-space:nowrap;}
+  .switch{
+    position:relative;width:46px;height:26px;background:#2a2a2e;border-radius:999px;
+    cursor:pointer;transition:background .2s;flex-shrink:0;
+  }
+  .switch.on{background:var(--accent);}
+  .switch .knob{
+    position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;
+    background:#fff;transition:left .18s;
+  }
+  .switch.on .knob{left:23px;}
+  .label-active{color:#fff;font-weight:600;}
+
+  select{
+    background:#1c1c1f;color:#eee;border:1px solid #333;border-radius:6px;
+    padding:6px 8px;font-size:13px;
+  }
+
+  #status{font-size:12px;color:var(--muted);margin-left:auto;text-align:right;}
+
+  main{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;background:#000;padding:16px;position:relative;}
+  #composite{background:#000;max-width:100%;max-height:100%;}
+  #placeholder{position:absolute;color:#4a4a4f;font-size:13px;text-align:center;line-height:1.7;pointer-events:none;}
+
+  footer{
+    padding:10px 16px;background:var(--panel);border-top:1px solid var(--panel-line);
+    display:flex;flex-direction:column;gap:8px;
+  }
+  .footer-row{display:flex;gap:10px;justify-content:flex-end;align-items:center;}
+  button.action{
+    background:#1c1c1f;color:#eee;border:1px solid #333;border-radius:8px;
+    padding:8px 16px;font-size:13px;cursor:pointer;
+  }
+  button.action:hover:not(:disabled){background:#26262a;}
+  button.action:disabled{opacity:.35;cursor:not-allowed;}
+  #logToggle{background:none;border:none;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;margin-right:auto;}
+  #logPanel{
+    display:none;max-height:140px;overflow-y:auto;background:#000;border:1px solid var(--panel-line);
+    border-radius:6px;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:11px;line-height:1.5;color:#9ad3ff;white-space:pre-wrap;word-break:break-all;
+  }
+  #logPanel .err{color:#ff8080;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>VRM 十字ビューア</h1>
+
+    <label class="file-btn" for="vrmInput">VRMを開く</label>
+    <input type="file" id="vrmInput" accept=".vrm" disabled>
+
+    <div class="toggle-wrap">
+      <span id="labelFeet" class="label-active">足を中心</span>
+      <div class="switch" id="centerSwitch"><div class="knob"></div></div>
+      <span id="labelHead">頭を中心</span>
+    </div>
+
+    <div class="toggle-wrap">
+      <span>解像度</span>
+      <select id="cellSize">
+        <option value="300">300px</option>
+        <option value="400" selected>400px</option>
+        <option value="512">512px</option>
+        <option value="640">640px</option>
+      </select>
+    </div>
+
+    <span id="status">VRMファイルを選択してください</span>
+  </header>
+
+  <main>
+    <canvas id="composite" width="1200" height="1200" style="display:none;"></canvas>
+    <div id="placeholder">VRMファイルを読み込むと<br>前後左右4方向の側面図を十字状に表示します</div>
+  </main>
+
+  <footer>
+    <div id="logPanel"></div>
+    <div class="footer-row">
+      <button id="logToggle">診断ログを表示</button>
+      <button class="action" id="downloadBtn" disabled>PNGとして保存</button>
+    </div>
+  </footer>
+</div>
+
+
+<script>
+// ---- 診断ログ(画面上に表示) ----
+const logEntries = [];
+let logPanel, logToggle, statusEl;
+function log(msg, isError) {
+  const time = new Date().toLocaleTimeString('ja-JP');
+  logEntries.push(`[${time}] ${isError ? '⚠ ' : ''}${msg}`);
+  if (logPanel) {
+    logPanel.innerHTML = logEntries
+      .map(l => `<div class="${l.includes('⚠') ? 'err' : ''}">${l.replace(/</g, '&lt;')}</div>`)
+      .join('');
+    logPanel.scrollTop = logPanel.scrollHeight;
+  }
+  if (isError) console.error(msg); else console.log(msg);
+}
+window.addEventListener('error', (e) => {
+  log('スクリプトエラー: ' + (e.message || e.error || e), true);
+  if (statusEl) statusEl.textContent = 'エラーが発生しました。診断ログを確認してください。';
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const reason = e.reason && e.reason.message ? e.reason.message : String(e.reason);
+  log('未処理のPromiseエラー: ' + reason, true);
+  if (statusEl) statusEl.textContent = 'エラーが発生しました。診断ログを確認してください。';
+});
+</script>
+
+<!--
+  classic (非モジュール)スクリプトとして three.js / GLTFLoader / three-vrm を読み込む。
+  type="module" の動的importはfile://で開いた場合にブラウザのセキュリティ制限で
+  ブロックされることがあるため、あえて古典的な<script src>方式(UMDビルド)を採用している。
+  three-vrmは0.6系(VRM0専用・classic UMDビルドが存在する最終系列)を使用。
+-->
+<script src="https://unpkg.com/three@0.133.0/build/three.js"
+        onload="log('three.js を読み込みました')"
+        onerror="log('three.js の読み込みに失敗しました', true)"></script>
+<script src="https://unpkg.com/three@0.133.0/examples/js/loaders/GLTFLoader.js"
+        onload="log('GLTFLoader.js を読み込みました')"
+        onerror="log('GLTFLoader.js の読み込みに失敗しました', true)"></script>
+<script src="https://unpkg.com/@pixiv/three-vrm@0.6.11/lib/three-vrm.js"
+        onload="log('three-vrm.js を読み込みました')"
+        onerror="log('three-vrm.js の読み込みに失敗しました', true)"></script>
+
+<script>
+statusEl = document.getElementById('status');
+logPanel = document.getElementById('logPanel');
+logToggle = document.getElementById('logToggle');
+
+const vrmInput = document.getElementById('vrmInput');
+const compositeCanvas = document.getElementById('composite');
+const compositeCtx = compositeCanvas.getContext('2d');
+const placeholder = document.getElementById('placeholder');
+const centerSwitch = document.getElementById('centerSwitch');
+const labelFeet = document.getElementById('labelFeet');
+const labelHead = document.getElementById('labelHead');
+const cellSizeSelect = document.getElementById('cellSize');
+const downloadBtn = document.getElementById('downloadBtn');
+
+logToggle.addEventListener('click', () => {
+  const showing = logPanel.style.display === 'block';
+  logPanel.style.display = showing ? 'none' : 'block';
+  logToggle.textContent = showing ? '診断ログを表示' : '診断ログを隠す';
+});
+
+let mode = 'feet'; // 'feet' | 'head'
+let currentVrm = null;
+let renderedViews = null; // { back, front, right, left } canvases
+let cellSize = parseInt(cellSizeSelect.value, 10);
+
+let renderer, scene, camera;
+let librariesReady = false;
+
+function init() {
+  if (typeof THREE === 'undefined' || !THREE.GLTFLoader || !THREE.VRM) {
+    statusEl.textContent = 'ライブラリの読み込みに失敗しました(診断ログを確認してください)';
+    log('致命的エラー: THREE / GLTFLoader / VRM のいずれかが読み込まれていません', true);
+    return;
+  }
+
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.setClearColor(0x000000, 1);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+  const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  keyLight.position.set(1, 2, 3);
+  scene.add(keyLight);
+  const fillLight = new THREE.DirectionalLight(0xffffff, 0.35);
+  fillLight.position.set(-1, 1.5, -2);
+  scene.add(fillLight);
+
+  camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
+
+  librariesReady = true;
+  statusEl.textContent = 'VRMファイルを選択してください';
+  vrmInput.disabled = false;
+  log('初期化完了');
+}
+
+function disposeObject3D(root) {
+  root.traverse((obj) => {
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((m) => {
+        Object.keys(m).forEach((key) => {
+          const val = m[key];
+          if (val && val.isTexture) val.dispose();
+        });
+        m.dispose();
+      });
+    }
+  });
+}
+
+function loadGLTF(url) {
+  return new Promise((resolve, reject) => {
+    const loader = new THREE.GLTFLoader();
+    loader.load(url, resolve, undefined, reject);
+  });
+}
+
+async function loadVrm(file) {
+  if (!librariesReady) {
+    log('ライブラリの準備ができていないため読み込めません', true);
+    return;
+  }
+
+  statusEl.textContent = '読み込み中...';
+  downloadBtn.disabled = true;
+
+  const url = URL.createObjectURL(file);
+
+  try {
+    log(`ファイル選択: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+    const gltf = await loadGLTF(url);
+    const vrm = await THREE.VRM.from(gltf);
+
+    if (currentVrm) {
+      scene.remove(currentVrm.scene);
+      disposeObject3D(currentVrm.scene);
+    }
+
+    scene.add(vrm.scene);
+    currentVrm = vrm;
+
+    statusEl.textContent = 'レンダリング中...';
+    renderAllViews();
+    drawComposite();
+
+    placeholder.style.display = 'none';
+    compositeCanvas.style.display = 'block';
+    statusEl.textContent = `読み込み完了: ${file.name}`;
+    downloadBtn.disabled = false;
+    log('読み込み・レンダリング完了');
+  } catch (err) {
+    log('VRM読み込みエラー: ' + (err && err.message ? err.message : err), true);
+    statusEl.textContent = '読み込みに失敗しました。診断ログを確認してください。';
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function getModelBounds(object3d) {
+  const box = new THREE.Box3().setFromObject(object3d);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  return { size, center };
+}
+
+// azimuth: モデルの周りをY軸中心に回るカメラ角度(ラジアン)
+// VRM0モデルは+Z方向を向いているため、azimuth=0を正面として扱う
+function renderView(azimuth, size, bounds) {
+  const { center, size: dims } = bounds;
+  const maxHeight = dims.y;
+  const maxHoriz = Math.max(dims.x, dims.z);
+  const half = (Math.max(maxHeight, maxHoriz) / 2) * 1.15; // 余白15%
+
+  camera.left = -half;
+  camera.right = half;
+  camera.top = half;
+  camera.bottom = -half;
+  camera.near = 0.01;
+  camera.far = 100;
+
+  const dist = Math.max(maxHeight, maxHoriz) * 2 + 2;
+  camera.position.set(
+    center.x + dist * Math.sin(azimuth),
+    center.y,
+    center.z + dist * Math.cos(azimuth)
+  );
+  camera.lookAt(center);
+  camera.up.set(0, 1, 0);
+  camera.updateProjectionMatrix();
+
+  renderer.setSize(size, size, false);
+  renderer.render(scene, camera);
+
+  const out = document.createElement('canvas');
+  out.width = size;
+  out.height = size;
+  out.getContext('2d').drawImage(renderer.domElement, 0, 0, size, size);
+  return out;
+}
+
+function renderAllViews() {
+  if (!currentVrm) return;
+  const bounds = getModelBounds(currentVrm.scene);
+
+  renderedViews = {
+    front: renderView(0, cellSize, bounds),             // 上段のソース(正面)
+    back:  renderView(Math.PI, cellSize, bounds),        // 下段のソース(背面)
+    right: renderView(Math.PI / 2, cellSize, bounds),    // 左列のソース
+    left:  renderView(-Math.PI / 2, cellSize, bounds),   // 右列のソース
+  };
+}
+
+function drawComposite() {
+  if (!renderedViews) return;
+
+  const S = cellSize;
+  compositeCanvas.width = S * 3;
+  compositeCanvas.height = S * 3;
+  compositeCtx.fillStyle = '#000';
+  compositeCtx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+
+  const deg = (d) => (d * Math.PI) / 180;
+  const feetCenter = mode === 'feet';
+
+  // 足中心: 各図の足側が十字の中心を向く / 頭中心: 頭側が中心を向く
+  const rot = feetCenter
+    ? { top: 0, bottom: deg(180), left: deg(90), right: deg(-90) }
+    : { top: deg(180), bottom: 0, left: deg(-90), right: deg(90) };
+
+  const slots = [
+    { img: renderedViews.back,  cx: S * 1.5, cy: S * 0.5, angle: rot.top },
+    { img: renderedViews.front, cx: S * 1.5, cy: S * 2.5, angle: rot.bottom },
+    { img: renderedViews.right, cx: S * 0.5, cy: S * 1.5, angle: rot.left },
+    { img: renderedViews.left,  cx: S * 2.5, cy: S * 1.5, angle: rot.right },
+  ];
+
+  for (const slot of slots) {
+    compositeCtx.save();
+    compositeCtx.translate(slot.cx, slot.cy);
+    compositeCtx.rotate(slot.angle);
+    compositeCtx.drawImage(slot.img, -S / 2, -S / 2, S, S);
+    compositeCtx.restore();
+  }
+}
+
+vrmInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) loadVrm(file);
+});
+
+centerSwitch.addEventListener('click', () => {
+  mode = mode === 'feet' ? 'head' : 'feet';
+  centerSwitch.classList.toggle('on', mode === 'head');
+  labelFeet.classList.toggle('label-active', mode === 'feet');
+  labelHead.classList.toggle('label-active', mode === 'head');
+  drawComposite();
+});
+
+cellSizeSelect.addEventListener('change', () => {
+  cellSize = parseInt(cellSizeSelect.value, 10);
+  if (currentVrm) {
+    renderAllViews();
+    drawComposite();
+  }
+});
+
+downloadBtn.addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.download = `vrm_cross_${mode === 'feet' ? '足中心' : '頭中心'}.png`;
+  link.href = compositeCanvas.toDataURL('image/png');
+  link.click();
+});
+
+init();
+</script>
+</body>
+</html>
