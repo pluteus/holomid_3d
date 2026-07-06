@@ -142,7 +142,7 @@ function log(msg, isError) {
   }
   if (isError) console.error(msg); else console.log(msg);
 }
-log('このHTMLファイルの作成日時: 2026-07-06 10:43 JST');
+log('このHTMLファイルの作成日時: 2026-07-06 10:55 JST');
 window.addEventListener('error', (e) => {
   log('スクリプトエラー: ' + (e.message || e.error || e), true);
   if (statusEl) statusEl.textContent = 'エラーが発生しました。診断ログを確認してください。';
@@ -208,6 +208,99 @@ fullscreenBtn.addEventListener('click', () => {
 });
 document.addEventListener('fullscreenchange', updateFullscreenBtn);
 document.addEventListener('webkitfullscreenchange', updateFullscreenBtn);
+
+// ---- ピンチズーム / パン(モデル表示エリア) ----
+let zScale = 1, zTx = 0, zTy = 0;
+const Z_MIN = 1, Z_MAX = 6;
+const activePointers = new Map();
+let pinchStartDist = 0, pinchStartScale = 1;
+let panStart = null;
+let lastTapTime = 0;
+
+compositeCanvas.style.transformOrigin = '0 0';
+compositeCanvas.style.touchAction = 'none';
+
+function applyZoomTransform() {
+  compositeCanvas.style.transform = `translate(${zTx}px, ${zTy}px) scale(${zScale})`;
+}
+function resetZoom() {
+  zScale = 1; zTx = 0; zTy = 0;
+  applyZoomTransform();
+}
+function clampPan() {
+  const contW = mainEl.clientWidth;
+  const contH = mainEl.clientHeight;
+  const maxX = contW * zScale;
+  const maxY = contH * zScale;
+  zTx = Math.min(maxX, Math.max(-maxX, zTx));
+  zTy = Math.min(maxY, Math.max(-maxY, zTy));
+}
+function pointFromEvent(e) {
+  const rect = mainEl.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+compositeCanvas.addEventListener('pointerdown', (e) => {
+  compositeCanvas.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId, pointFromEvent(e));
+
+  if (activePointers.size === 2) {
+    const pts = [...activePointers.values()];
+    pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+    pinchStartScale = zScale;
+    panStart = null;
+  } else if (activePointers.size === 1) {
+    const p = pointFromEvent(e);
+    panStart = { x: p.x, y: p.y, tx: zTx, ty: zTy };
+  }
+});
+
+compositeCanvas.addEventListener('pointermove', (e) => {
+  if (!activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId, pointFromEvent(e));
+
+  if (activePointers.size === 2) {
+    const pts = [...activePointers.values()];
+    const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    const center = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+    const newScale = Math.min(Z_MAX, Math.max(Z_MIN, pinchStartScale * (dist / pinchStartDist)));
+
+    // ピンチ中心の位置を保ったまま拡大縮小する
+    const localX = (center.x - zTx) / zScale;
+    const localY = (center.y - zTy) / zScale;
+    zTx = center.x - localX * newScale;
+    zTy = center.y - localY * newScale;
+    zScale = newScale;
+    clampPan();
+    applyZoomTransform();
+  } else if (activePointers.size === 1 && panStart && zScale > 1) {
+    const p = [...activePointers.values()][0];
+    zTx = panStart.tx + (p.x - panStart.x);
+    zTy = panStart.ty + (p.y - panStart.y);
+    clampPan();
+    applyZoomTransform();
+  }
+});
+
+function endPointer(e) {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size === 1) {
+    const p = [...activePointers.values()][0];
+    panStart = { x: p.x, y: p.y, tx: zTx, ty: zTy };
+  } else if (activePointers.size === 0) {
+    panStart = null;
+    if (zScale <= 1) resetZoom();
+
+    if (e.pointerType === 'touch') {
+      const now = Date.now();
+      if (now - lastTapTime < 300) resetZoom();
+      lastTapTime = now;
+    }
+  }
+}
+compositeCanvas.addEventListener('pointerup', endPointer);
+compositeCanvas.addEventListener('pointercancel', endPointer);
+compositeCanvas.addEventListener('dblclick', resetZoom);
 
 logToggle.addEventListener('click', () => {
   const showing = logPanel.style.display === 'block';
@@ -320,6 +413,7 @@ async function loadVrm(file) {
     statusEl.textContent = 'レンダリング中...';
     renderAllViews();
     drawComposite();
+    resetZoom();
 
     placeholder.style.display = 'none';
     compositeCanvas.style.display = 'block';
