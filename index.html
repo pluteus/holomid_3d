@@ -246,8 +246,8 @@ function resetZoom() {
 }
 
 // ---- 十字の各画像の中心からの距離(上下スワイプで調整) ----
-let armRatio = 1; // 1 = 標準(隣接)配置
-const ARM_RATIO_MIN = 0;
+let armRatio = 1; // 1 = 標準(隣接)配置。負の値になると中心を越えて反対側へ近づく
+const ARM_RATIO_MIN = -1;
 const ARM_RATIO_MAX = 2.5;
 
 // ---- 左右スワイプでモデルの体軸(Y軸)を基準に回転 ----
@@ -548,14 +548,24 @@ function drawComposite() {
     : { top: deg(180), bottom: 0, left: deg(90), right: deg(270) };
 
   const slots = [
-    { img: renderedViews.back,  cx: centerX, cy: centerY - armDistance, angle: rot.top },
-    { img: renderedViews.front, cx: centerX, cy: centerY + armDistance, angle: rot.bottom },
-    { img: renderedViews.right, cx: centerX - armDistance, cy: centerY, angle: rot.left },
-    { img: renderedViews.left,  cx: centerX + armDistance, cy: centerY, angle: rot.right },
+    { img: renderedViews.back,  cx: centerX, cy: centerY - armDistance, angle: rot.top,    side: 'top' },
+    { img: renderedViews.front, cx: centerX, cy: centerY + armDistance, angle: rot.bottom, side: 'bottom' },
+    { img: renderedViews.right, cx: centerX - armDistance, cy: centerY, angle: rot.left,   side: 'left' },
+    { img: renderedViews.left,  cx: centerX + armDistance, cy: centerY, angle: rot.right,  side: 'right' },
   ];
 
   for (const slot of slots) {
     compositeCtx.save();
+    // 中心軸(centerX/centerY)を越えた部分は表示しない(距離がマイナスになっても反対側へはみ出させない)
+    compositeCtx.beginPath();
+    switch (slot.side) {
+      case 'top':    compositeCtx.rect(0, 0, canvasSize, centerY); break;
+      case 'bottom': compositeCtx.rect(0, centerY, canvasSize, canvasSize - centerY); break;
+      case 'left':   compositeCtx.rect(0, 0, centerX, canvasSize); break;
+      case 'right':  compositeCtx.rect(centerX, 0, canvasSize - centerX, canvasSize); break;
+    }
+    compositeCtx.clip();
+
     compositeCtx.translate(slot.cx, slot.cy);
     compositeCtx.rotate(slot.angle);
     compositeCtx.drawImage(slot.img, -S / 2, -S / 2, S, S);
