@@ -68,7 +68,7 @@
   button.action:disabled{opacity:.35;cursor:not-allowed;}
   #logToggle{background:none;border:none;color:var(--muted);font-size:12px;text-decoration:underline;cursor:pointer;margin-right:auto;}
   #logPanel{
-    display:none;max-height:140px;overflow-y:auto;background:#000;border:1px solid var(--panel-line);
+    display:block;max-height:140px;overflow-y:auto;background:#000;border:1px solid var(--panel-line);
     border-radius:6px;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
     font-size:11px;line-height:1.5;color:#9ad3ff;white-space:pre-wrap;word-break:break-all;
   }
@@ -110,7 +110,7 @@
   <footer>
     <div id="logPanel"></div>
     <div class="footer-row">
-      <button id="logToggle">診断ログを表示</button>
+      <button id="logToggle">診断ログを隠す</button>
       <button class="action" id="downloadBtn" disabled>PNGとして保存</button>
     </div>
   </footer>
@@ -132,6 +132,7 @@ function log(msg, isError) {
   }
   if (isError) console.error(msg); else console.log(msg);
 }
+log('このHTMLファイルの作成日時: 2026-07-06 10:30 JST');
 window.addEventListener('error', (e) => {
   log('スクリプトエラー: ' + (e.message || e.error || e), true);
   if (statusEl) statusEl.textContent = 'エラーが発生しました。診断ログを確認してください。';
