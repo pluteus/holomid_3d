@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>VRM 十字ビューア</title>
 <style>
   :root{
@@ -15,7 +15,7 @@
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;background:#0a0a0c;color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif;
-    height:100%;overflow:hidden;}
+    height:100%;overflow:hidden;touch-action:manipulation;}
   #app{display:flex;flex-direction:column;height:100%;}
 
   header{
@@ -142,7 +142,7 @@ function log(msg, isError) {
   }
   if (isError) console.error(msg); else console.log(msg);
 }
-log('このHTMLファイルの作成日時: 2026-07-06 11:05 JST');
+log('このHTMLファイルの作成日時: 2026-07-06 11:20 JST');
 window.addEventListener('error', (e) => {
   log('スクリプトエラー: ' + (e.message || e.error || e), true);
   if (statusEl) statusEl.textContent = 'エラーが発生しました。診断ログを確認してください。';
@@ -152,6 +152,17 @@ window.addEventListener('unhandledrejection', (e) => {
   log('未処理のPromiseエラー: ' + reason, true);
   if (statusEl) statusEl.textContent = 'エラーが発生しました。診断ログを確認してください。';
 });
+
+// ページ全体のピンチズームを禁止(Safari/WebKit系のジェスチャーイベントを抑止)
+['gesturestart', 'gesturechange', 'gestureend'].forEach((type) => {
+  document.addEventListener(type, (e) => e.preventDefault());
+});
+// 2本指以上でのタッチ操作はモデル表示エリア(#composite)以外ではページ拡大に使われないようにする
+document.addEventListener('touchmove', (e) => {
+  if (e.touches && e.touches.length > 1 && e.target && e.target.id !== 'composite') {
+    e.preventDefault();
+  }
+}, { passive: false });
 </script>
 
 <!--
@@ -352,12 +363,12 @@ function init() {
     return;
   }
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: true });
   renderer.setPixelRatio(1);
-  renderer.setClearColor(0x000000, 1);
+  renderer.setClearColor(0x000000, 0); // 背景を透過にする(黒は透過色として扱う)
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x000000);
+  scene.background = null; // 背景を描画しない(透過)
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.75));
   const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
