@@ -228,7 +228,7 @@ let pinchStartDist = 0, pinchStartZoom = 1;
 let lastTapTime = 0;
 let renderPending = false;
 
-function scheduleZoomRender() {
+function scheduleRender() {
   if (renderPending) return;
   renderPending = true;
   requestAnimationFrame(() => {
@@ -242,7 +242,7 @@ function scheduleZoomRender() {
 function resetZoom() {
   if (viewZoom !== 1) {
     viewZoom = 1;
-    scheduleZoomRender();
+    scheduleRender();
   }
 }
 
@@ -250,7 +250,12 @@ function resetZoom() {
 let armRatio = 1; // 1 = 標準(隣接)配置
 const ARM_RATIO_MIN = 0;
 const ARM_RATIO_MAX = 2.5;
-let vDragStart = null; // { y, armRatio, displayScale }
+
+// ---- 左右スワイプでモデルの体軸(Y軸)を基準に回転 ----
+let rotationY = 0; // ラジアン。左右スワイプで加算され、全方向のレンダリングに反映される
+const ROTATION_SENSITIVITY = Math.PI / 300; // 1pxあたりの回転量(300px≒180度)
+
+let vDragStart = null; // { x, y, armRatio, rotationY, displayScale }
 
 compositeCanvas.style.touchAction = 'none';
 
@@ -272,7 +277,7 @@ compositeCanvas.addEventListener('pointerdown', (e) => {
     const p = pointFromEvent(e);
     const rect = compositeCanvas.getBoundingClientRect();
     const displayScale = rect.width > 0 ? (compositeCanvas.width / rect.width) : 1;
-    vDragStart = { y: p.y, armRatio, displayScale };
+    vDragStart = { x: p.x, y: p.y, armRatio, rotationY, displayScale };
   }
 });
 
@@ -286,18 +291,30 @@ compositeCanvas.addEventListener('pointermove', (e) => {
     const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, pinchStartZoom * (dist / pinchStartDist)));
     if (newZoom !== viewZoom) {
       viewZoom = newZoom;
-      scheduleZoomRender();
+      scheduleRender();
     }
   } else if (activePointers.size === 1 && vDragStart) {
     const p = [...activePointers.values()][0];
+    const dx = (p.x - vDragStart.x) * vDragStart.displayScale;
     const dy = (p.y - vDragStart.y) * vDragStart.displayScale;
+
+    // 左右にスワイプするとモデルの体軸(Y軸)を基準にカメラが回転し、再レンダリングされる
+    const newRotationY = vDragStart.rotationY + dx * ROTATION_SENSITIVITY;
+    const rotationChanged = newRotationY !== rotationY;
+    if (rotationChanged) rotationY = newRotationY;
+
     // 上にスワイプ(dyが負)すると中心からの距離が増え、下にスワイプすると縮まる
     const newRatio = Math.min(
       ARM_RATIO_MAX,
       Math.max(ARM_RATIO_MIN, vDragStart.armRatio - dy / cellSize)
     );
-    if (newRatio !== armRatio) {
-      armRatio = newRatio;
+    const ratioChanged = newRatio !== armRatio;
+    if (ratioChanged) armRatio = newRatio;
+
+    if (rotationChanged) {
+      // カメラ回転は3D再レンダリングを伴うためrAFでスケジューリングする(drawCompositeも内部で実行される)
+      scheduleRender();
+    } else if (ratioChanged) {
       drawComposite();
     }
   }
@@ -309,7 +326,7 @@ function endPointer(e) {
     const p = [...activePointers.values()][0];
     const rect = compositeCanvas.getBoundingClientRect();
     const displayScale = rect.width > 0 ? (compositeCanvas.width / rect.width) : 1;
-    vDragStart = { y: p.y, armRatio, displayScale };
+    vDragStart = { x: p.x, y: p.y, armRatio, rotationY, displayScale };
   } else if (activePointers.size === 0) {
     vDragStart = null;
 
@@ -433,6 +450,7 @@ async function loadVrm(file) {
     currentVrm = vrm;
 
     statusEl.textContent = 'レンダリング中...';
+    rotationY = 0;
     renderAllViews();
     drawComposite();
     resetZoom();
@@ -461,6 +479,7 @@ function getModelBounds(object3d) {
 
 // azimuth: モデルの周りをY軸中心に回るカメラ角度(ラジアン)
 // VRM0モデルは+Z方向を向いているため、azimuth=0を正面として扱う
+// renderAllViews側で呼び出し時にazimuthへrotationY(体軸回転オフセット)を加算している
 function renderView(azimuth, size, bounds) {
   const { center, size: dims } = bounds;
   const maxHeight = dims.y;
@@ -499,10 +518,10 @@ function renderAllViews() {
   const bounds = getModelBounds(currentVrm.scene);
 
   renderedViews = {
-    front: renderView(0, cellSize, bounds),             // 上段のソース(正面)
-    back:  renderView(Math.PI, cellSize, bounds),        // 下段のソース(背面)
-    right: renderView(Math.PI / 2, cellSize, bounds),    // 左列のソース
-    left:  renderView(-Math.PI / 2, cellSize, bounds),   // 右列のソース
+    front: renderView(0 + rotationY, cellSize, bounds),             // 上段のソース(正面)
+    back:  renderView(Math.PI + rotationY, cellSize, bounds),        // 下段のソース(背面)
+    right: renderView(Math.PI / 2 + rotationY, cellSize, bounds),    // 左列のソース
+    left:  renderView(-Math.PI / 2 + rotationY, cellSize, bounds),   // 右列のソース
   };
 }
 
