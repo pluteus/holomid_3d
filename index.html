@@ -142,7 +142,7 @@ function log(msg, isError) {
   }
   if (isError) console.error(msg); else console.log(msg);
 }
-log('このHTMLファイルの作成日時: 2026-07-06 10:55 JST');
+log('このHTMLファイルの作成日時: 2026-07-06 11:05 JST');
 window.addEventListener('error', (e) => {
   log('スクリプトエラー: ' + (e.message || e.error || e), true);
   if (statusEl) statusEl.textContent = 'エラーが発生しました。診断ログを確認してください。';
@@ -217,6 +217,12 @@ let pinchStartDist = 0, pinchStartScale = 1;
 let panStart = null;
 let lastTapTime = 0;
 
+// ---- 十字の各画像の中心からの距離(上下スワイプで調整) ----
+let armRatio = 1; // 1 = 標準(隣接)配置
+const ARM_RATIO_MIN = 0;
+const ARM_RATIO_MAX = 2.5;
+let vDragStart = null; // { y, armRatio, displayScale }
+
 compositeCanvas.style.transformOrigin = '0 0';
 compositeCanvas.style.touchAction = 'none';
 
@@ -249,9 +255,18 @@ compositeCanvas.addEventListener('pointerdown', (e) => {
     pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
     pinchStartScale = zScale;
     panStart = null;
+    vDragStart = null;
   } else if (activePointers.size === 1) {
     const p = pointFromEvent(e);
     panStart = { x: p.x, y: p.y, tx: zTx, ty: zTy };
+
+    if (zScale <= 1.001) {
+      const rect = compositeCanvas.getBoundingClientRect();
+      const displayScale = rect.width > 0 ? (compositeCanvas.width / rect.width) : 1;
+      vDragStart = { y: p.y, armRatio, displayScale };
+    } else {
+      vDragStart = null;
+    }
   }
 });
 
@@ -279,6 +294,18 @@ compositeCanvas.addEventListener('pointermove', (e) => {
     zTy = panStart.ty + (p.y - panStart.y);
     clampPan();
     applyZoomTransform();
+  } else if (activePointers.size === 1 && vDragStart && zScale <= 1.001) {
+    const p = [...activePointers.values()][0];
+    const dy = (p.y - vDragStart.y) * vDragStart.displayScale;
+    // 上にスワイプ(dyが負)すると中心からの距離が増え、下にスワイプすると縮まる
+    const newRatio = Math.min(
+      ARM_RATIO_MAX,
+      Math.max(ARM_RATIO_MIN, vDragStart.armRatio - dy / cellSize)
+    );
+    if (newRatio !== armRatio) {
+      armRatio = newRatio;
+      drawComposite();
+    }
   }
 });
 
@@ -287,8 +314,10 @@ function endPointer(e) {
   if (activePointers.size === 1) {
     const p = [...activePointers.values()][0];
     panStart = { x: p.x, y: p.y, tx: zTx, ty: zTy };
+    vDragStart = null;
   } else if (activePointers.size === 0) {
     panStart = null;
+    vDragStart = null;
     if (zScale <= 1) resetZoom();
 
     if (e.pointerType === 'touch') {
@@ -488,10 +517,16 @@ function drawComposite() {
   if (!renderedViews) return;
 
   const S = cellSize;
-  compositeCanvas.width = S * 3;
-  compositeCanvas.height = S * 3;
+  const armDistance = S * armRatio;
+  const half = armDistance + S / 2; // 中心から画像外端までの距離
+  const canvasSize = Math.max(S, Math.round(half * 2));
+  compositeCanvas.width = canvasSize;
+  compositeCanvas.height = canvasSize;
   compositeCtx.fillStyle = '#000';
   compositeCtx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+
+  const centerX = canvasSize / 2;
+  const centerY = canvasSize / 2;
 
   const deg = (d) => (d * Math.PI) / 180;
   const feetCenter = mode === 'feet';
@@ -502,10 +537,10 @@ function drawComposite() {
     : { top: deg(180), bottom: 0, left: deg(90), right: deg(270) };
 
   const slots = [
-    { img: renderedViews.back,  cx: S * 1.5, cy: S * 0.5, angle: rot.top },
-    { img: renderedViews.front, cx: S * 1.5, cy: S * 2.5, angle: rot.bottom },
-    { img: renderedViews.right, cx: S * 0.5, cy: S * 1.5, angle: rot.left },
-    { img: renderedViews.left,  cx: S * 2.5, cy: S * 1.5, angle: rot.right },
+    { img: renderedViews.back,  cx: centerX, cy: centerY - armDistance, angle: rot.top },
+    { img: renderedViews.front, cx: centerX, cy: centerY + armDistance, angle: rot.bottom },
+    { img: renderedViews.right, cx: centerX - armDistance, cy: centerY, angle: rot.left },
+    { img: renderedViews.left,  cx: centerX + armDistance, cy: centerY, angle: rot.right },
   ];
 
   for (const slot of slots) {
