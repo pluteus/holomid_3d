@@ -91,6 +91,11 @@
     <label class="file-btn" for="vrmInput">VRMを開く</label>
     <input type="file" id="vrmInput" accept=".vrm" disabled>
 
+    <label class="file-btn" for="vrmaInput">VRMAを開く</label>
+    <input type="file" id="vrmaInput" accept=".vrma" disabled>
+
+    <button class="action" id="motionToggleBtn" style="display:none;">⏸ モーション停止</button>
+
     <div class="toggle-wrap">
       <span id="labelFeet" class="label-active">足を中心</span>
       <div class="switch" id="centerSwitch"><div class="knob"></div></div>
@@ -129,10 +134,10 @@
 <script>
 // ---- 診断ログ(画面上に表示) ----
 const logEntries = [];
-let logPanel, logToggle, statusEl;
 function log(msg, isError) {
   const time = new Date().toLocaleTimeString('ja-JP');
   logEntries.push(`[${time}] ${isError ? '⚠ ' : ''}${msg}`);
+  const logPanel = document.getElementById('logPanel');
   if (logPanel) {
     logPanel.innerHTML = logEntries
       .map(l => `<div class="${l.includes('⚠') ? 'err' : ''}">${l.replace(/</g, '&lt;')}</div>`)
@@ -144,11 +149,13 @@ function log(msg, isError) {
 log('このHTMLファイルの作成日時: 2026-07-06 11:35 JST');
 window.addEventListener('error', (e) => {
   log('スクリプトエラー: ' + (e.message || e.error || e), true);
+  const statusEl = document.getElementById('status');
   if (statusEl) statusEl.textContent = 'エラーが発生しました。診断ログを確認してください。';
 });
 window.addEventListener('unhandledrejection', (e) => {
   const reason = e.reason && e.reason.message ? e.reason.message : String(e.reason);
   log('未処理のPromiseエラー: ' + reason, true);
+  const statusEl = document.getElementById('status');
   if (statusEl) statusEl.textContent = 'エラーが発生しました。診断ログを確認してください。';
 });
 
@@ -165,27 +172,31 @@ document.addEventListener('touchmove', (e) => {
 </script>
 
 <!--
-  classic (非モジュール)スクリプトとして three.js / GLTFLoader / three-vrm を読み込む。
-  type="module" の動的importはfile://で開いた場合にブラウザのセキュリティ制限で
-  ブロックされることがあるため、あえて古典的な<script src>方式(UMDビルド)を採用している。
-  three-vrmは0.6系(VRM0専用・classic UMDビルドが存在する最終系列)を使用。
+  ES modules(importmap)でthree.js / GLTFLoader / three-vrm / three-vrm-animationを読み込む。
+  VRMA(モーション)対応にはVRM0/VRM1両対応の新しいthree-vrm(v3系, ESM専用配布)が必要なため、
+  以前使用していた0.6系classic UMDビルドから移行した。
+  注意: importmapを用いたESMは file:// で直接開いた場合、ブラウザによっては
+  CORS制限でブロックされることがある。http(s)経由(GitHub Pages等)で開くこと。
 -->
-<script src="https://unpkg.com/three@0.133.0/build/three.js"
-        onload="log('three.js を読み込みました')"
-        onerror="log('three.js の読み込みに失敗しました', true)"></script>
-<script src="https://unpkg.com/three@0.133.0/examples/js/loaders/GLTFLoader.js"
-        onload="log('GLTFLoader.js を読み込みました')"
-        onerror="log('GLTFLoader.js の読み込みに失敗しました', true)"></script>
-<script src="https://unpkg.com/@pixiv/three-vrm@0.6.11/lib/three-vrm.js"
-        onload="log('three-vrm.js を読み込みました')"
-        onerror="log('three-vrm.js の読み込みに失敗しました', true)"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+    "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.js",
+    "@pixiv/three-vrm-animation": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm-animation@3/lib/three-vrm-animation.module.js"
+  }
+}
+</script>
 
-<script>
-statusEl = document.getElementById('status');
-logPanel = document.getElementById('logPanel');
-logToggle = document.getElementById('logToggle');
+<script type="module">
+const statusEl = document.getElementById('status');
+const logPanel = document.getElementById('logPanel');
+const logToggle = document.getElementById('logToggle');
 
 const vrmInput = document.getElementById('vrmInput');
+const vrmaInput = document.getElementById('vrmaInput');
+const motionToggleBtn = document.getElementById('motionToggleBtn');
 const compositeCanvas = document.getElementById('composite');
 const compositeCtx = compositeCanvas.getContext('2d');
 const placeholder = document.getElementById('placeholder');
@@ -354,10 +365,43 @@ let cellSize = parseInt(cellSizeSelect.value, 10);
 let renderer, scene, camera;
 let librariesReady = false;
 
-function init() {
-  if (typeof THREE === 'undefined' || !THREE.GLTFLoader || !THREE.VRM) {
+// ESMライブラリの実体(動的importで取得後にここへ格納する)
+let THREE, GLTFLoader, VRMLoaderPlugin, VRMUtils, VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy;
+
+// ---- VRMAモーション再生 ----
+let mixer = null;            // THREE.AnimationMixer
+let currentVrmAnimation = null; // 読み込んだVRMAnimation(VRMを差し替えても再利用してリターゲットする)
+let animClock = null;
+let animating = false;
+
+async function loadLibraries() {
+  try {
+    THREE = await import('three');
+    log('three.js を読み込みました');
+  } catch (err) { log('three.js の読み込みに失敗しました: ' + (err && err.message), true); }
+
+  try {
+    ({ GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js'));
+    log('GLTFLoader.js を読み込みました');
+  } catch (err) { log('GLTFLoader.js の読み込みに失敗しました: ' + (err && err.message), true); }
+
+  try {
+    ({ VRMLoaderPlugin, VRMUtils } = await import('@pixiv/three-vrm'));
+    log('three-vrm を読み込みました');
+  } catch (err) { log('three-vrm の読み込みに失敗しました: ' + (err && err.message), true); }
+
+  try {
+    ({ VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy } = await import('@pixiv/three-vrm-animation'));
+    log('three-vrm-animation を読み込みました');
+  } catch (err) { log('three-vrm-animation の読み込みに失敗しました: ' + (err && err.message), true); }
+}
+
+async function init() {
+  await loadLibraries();
+
+  if (!THREE || !GLTFLoader || !VRMLoaderPlugin || !VRMAnimationLoaderPlugin) {
     statusEl.textContent = 'ライブラリの読み込みに失敗しました(診断ログを確認してください)';
-    log('致命的エラー: THREE / GLTFLoader / VRM のいずれかが読み込まれていません', true);
+    log('致命的エラー: THREE / GLTFLoader / VRM / VRMAnimation のいずれかが読み込まれていません', true);
     return;
   }
 
@@ -381,6 +425,7 @@ function init() {
   librariesReady = true;
   statusEl.textContent = 'VRMファイルを選択してください';
   vrmInput.disabled = false;
+  vrmaInput.disabled = false;
   log('初期化完了');
 
   autoLoadDefaultModel();
@@ -417,11 +462,88 @@ function disposeObject3D(root) {
   });
 }
 
+// gltfローダー(VRM本体とVRMAモーションの両方をこれ一つで読み込める)
+function createGLTFLoader() {
+  const loader = new GLTFLoader();
+  loader.register((parser) => new VRMLoaderPlugin(parser));
+  loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+  return loader;
+}
+
 function loadGLTF(url) {
   return new Promise((resolve, reject) => {
-    const loader = new THREE.GLTFLoader();
-    loader.load(url, resolve, undefined, reject);
+    createGLTFLoader().load(url, resolve, undefined, reject);
   });
+}
+
+// ---- モーション適用/再生ループ ----
+function stopAnimationLoop() {
+  animating = false;
+}
+
+function startAnimationLoop() {
+  motionToggleBtn.style.display = '';
+  motionToggleBtn.textContent = '⏸ モーション停止';
+  if (animating) return;
+  animating = true;
+  animClock = new THREE.Clock();
+  animClock.start();
+  requestAnimationFrame(animationTick);
+}
+
+function animationTick() {
+  if (!animating) return;
+  const delta = animClock.getDelta();
+  if (mixer) mixer.update(delta);
+  if (currentVrm) {
+    currentVrm.update(delta);
+    renderAllViews();
+    drawComposite();
+  }
+  requestAnimationFrame(animationTick);
+}
+
+function applyVrmAnimationToCurrentVrm() {
+  if (!currentVrmAnimation || !currentVrm) return;
+  if (mixer) mixer.stopAllAction();
+  const clip = createVRMAnimationClip(currentVrmAnimation, currentVrm);
+  mixer = new THREE.AnimationMixer(currentVrm.scene);
+  mixer.clipAction(clip).play(); // AnimationActionは既定でLoopRepeat(無限)なのでループ再生になる
+  startAnimationLoop();
+}
+
+async function loadVrma(file) {
+  if (!librariesReady) {
+    log('ライブラリの準備ができていないため読み込めません', true);
+    return;
+  }
+  if (!currentVrm) {
+    log('先にVRMモデルを読み込んでください', true);
+    statusEl.textContent = '先にVRMモデルを読み込んでください';
+    return;
+  }
+
+  statusEl.textContent = 'モーション読み込み中...';
+  const url = URL.createObjectURL(file);
+
+  try {
+    log(`VRMAファイル選択: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+    const gltf = await loadGLTF(url);
+    const vrmAnimations = gltf.userData.vrmAnimations;
+    if (!vrmAnimations || !vrmAnimations.length) {
+      throw new Error('このファイルにVRMAモーションデータが見つかりませんでした');
+    }
+    currentVrmAnimation = vrmAnimations[0];
+    applyVrmAnimationToCurrentVrm();
+
+    statusEl.textContent = `モーション再生中: ${file.name}`;
+    log('VRMAモーションの読み込み・適用・ループ再生を開始しました');
+  } catch (err) {
+    log('VRMA読み込みエラー: ' + (err && err.message ? err.message : err), true);
+    statusEl.textContent = 'モーションの読み込みに失敗しました。診断ログを確認してください。';
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 async function loadVrm(file) {
@@ -438,7 +560,26 @@ async function loadVrm(file) {
   try {
     log(`ファイル選択: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
     const gltf = await loadGLTF(url);
-    const vrm = await THREE.VRM.from(gltf);
+    const vrm = gltf.userData.vrm;
+    if (!vrm) throw new Error('VRMデータが見つかりませんでした');
+
+    // VRM0.0モデルは-Z向きなので、+Z向き(VRM1.0基準)に統一する(VRM1.0では何もしない)
+    VRMUtils.rotateVRM0(vrm);
+    VRMUtils.removeUnnecessaryVertices(vrm.scene);
+    VRMUtils.removeUnnecessaryJoints(vrm.scene);
+    vrm.scene.traverse((obj) => { obj.frustumCulled = false; });
+
+    // モーションのlookAtトラック再生に必要
+    const lookAtQuatProxy = new VRMLookAtQuaternionProxy(vrm.lookAt);
+    lookAtQuatProxy.name = 'lookAtQuaternionProxy';
+    vrm.scene.add(lookAtQuatProxy);
+
+    if (mixer) {
+      mixer.stopAllAction();
+      mixer = null;
+    }
+    stopAnimationLoop();
+    motionToggleBtn.style.display = 'none';
 
     if (currentVrm) {
       scene.remove(currentVrm.scene);
@@ -456,8 +597,15 @@ async function loadVrm(file) {
 
     placeholder.style.display = 'none';
     compositeCanvas.style.display = 'block';
-    statusEl.textContent = `読み込み完了: ${file.name}`;
     downloadBtn.disabled = false;
+
+    if (currentVrmAnimation) {
+      // 既に読み込み済みのモーションがあれば、新しいモデルにも再適用(リターゲット)する
+      applyVrmAnimationToCurrentVrm();
+      statusEl.textContent = `読み込み完了: ${file.name}(モーション再生中)`;
+    } else {
+      statusEl.textContent = `読み込み完了: ${file.name}`;
+    }
     log('読み込み・レンダリング完了');
   } catch (err) {
     log('VRM読み込みエラー: ' + (err && err.message ? err.message : err), true);
@@ -477,8 +625,7 @@ function getModelBounds(object3d) {
 }
 
 // azimuth: モデルの周りをY軸中心に回るカメラ角度(ラジアン)
-// このモデルは想定と逆向き(-Z方向)を向いているため、FRONT_AZIMUTH_OFFSETで180度反転して
-// 正面/背面・左右側面が実際の見た目と一致するように補正している
+// VRMUtils.rotateVRM0()でVRM0/VRM1いずれのモデルも+Z方向を向くよう統一しているため、azimuth=0を正面として扱う
 // renderAllViews側で呼び出し時にazimuthへrotationY(体軸回転オフセット)を加算している
 function renderView(azimuth, size, bounds) {
   const { center, size: dims } = bounds;
@@ -517,13 +664,11 @@ function renderAllViews() {
   if (!currentVrm) return;
   const bounds = getModelBounds(currentVrm.scene);
 
-  const FRONT_AZIMUTH_OFFSET = Math.PI; // カメラ位置・向きを反転させる補正(180度)
-
   renderedViews = {
-    front: renderView(FRONT_AZIMUTH_OFFSET + 0 + rotationY, cellSize, bounds),             // 上段のソース(正面)
-    back:  renderView(FRONT_AZIMUTH_OFFSET + Math.PI + rotationY, cellSize, bounds),        // 下段のソース(背面)
-    right: renderView(FRONT_AZIMUTH_OFFSET + Math.PI / 2 + rotationY, cellSize, bounds),    // 左列のソース
-    left:  renderView(FRONT_AZIMUTH_OFFSET - Math.PI / 2 + rotationY, cellSize, bounds),   // 右列のソース
+    front: renderView(0 + rotationY, cellSize, bounds),             // 上段のソース(正面)
+    back:  renderView(Math.PI + rotationY, cellSize, bounds),        // 下段のソース(背面)
+    right: renderView(Math.PI / 2 + rotationY, cellSize, bounds),    // 左列のソース
+    left:  renderView(-Math.PI / 2 + rotationY, cellSize, bounds),   // 右列のソース
   };
 }
 
@@ -579,6 +724,20 @@ function drawComposite() {
 vrmInput.addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (file) loadVrm(file);
+});
+
+vrmaInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) loadVrma(file);
+});
+
+motionToggleBtn.addEventListener('click', () => {
+  if (animating) {
+    stopAnimationLoop();
+    motionToggleBtn.textContent = '▶ モーション再開';
+  } else if (currentVrmAnimation) {
+    startAnimationLoop();
+  }
 });
 
 centerSwitch.addEventListener('click', () => {
