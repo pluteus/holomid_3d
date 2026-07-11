@@ -477,7 +477,8 @@ function getModelBounds(object3d) {
 }
 
 // azimuth: モデルの周りをY軸中心に回るカメラ角度(ラジアン)
-// VRM0モデルは+Z方向を向いているため、azimuth=0を正面として扱う
+// このモデルは想定と逆向き(-Z方向)を向いているため、FRONT_AZIMUTH_OFFSETで180度反転して
+// 正面/背面・左右側面が実際の見た目と一致するように補正している
 // renderAllViews側で呼び出し時にazimuthへrotationY(体軸回転オフセット)を加算している
 function renderView(azimuth, size, bounds) {
   const { center, size: dims } = bounds;
@@ -516,11 +517,13 @@ function renderAllViews() {
   if (!currentVrm) return;
   const bounds = getModelBounds(currentVrm.scene);
 
+  const FRONT_AZIMUTH_OFFSET = Math.PI; // カメラ位置・向きを反転させる補正(180度)
+
   renderedViews = {
-    front: renderView(0 + rotationY, cellSize, bounds),             // 上段のソース(正面)
-    back:  renderView(Math.PI + rotationY, cellSize, bounds),        // 下段のソース(背面)
-    right: renderView(Math.PI / 2 + rotationY, cellSize, bounds),    // 左列のソース
-    left:  renderView(-Math.PI / 2 + rotationY, cellSize, bounds),   // 右列のソース
+    front: renderView(FRONT_AZIMUTH_OFFSET + 0 + rotationY, cellSize, bounds),             // 上段のソース(正面)
+    back:  renderView(FRONT_AZIMUTH_OFFSET + Math.PI + rotationY, cellSize, bounds),        // 下段のソース(背面)
+    right: renderView(FRONT_AZIMUTH_OFFSET + Math.PI / 2 + rotationY, cellSize, bounds),    // 左列のソース
+    left:  renderView(FRONT_AZIMUTH_OFFSET - Math.PI / 2 + rotationY, cellSize, bounds),   // 右列のソース
   };
 }
 
