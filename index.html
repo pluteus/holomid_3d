@@ -51,7 +51,7 @@
 
   #status{font-size:12px;color:var(--muted);margin-left:auto;text-align:right;}
 
-  main{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;background:#000;padding:16px;position:relative;}
+  main{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;background:#000;padding:16px;position:relative;min-width:0;}
   #composite{background:#000;}
   #fullscreenBtn{
     position:absolute;top:12px;right:12px;z-index:5;
@@ -62,6 +62,46 @@
   #fullscreenBtn:hover{background:rgba(255,255,255,0.16);}
   main:fullscreen{padding:0;}
   #placeholder{position:absolute;color:#4a4a4f;font-size:13px;text-align:center;line-height:1.7;pointer-events:none;}
+
+  #viewerRow{flex:1;display:flex;flex-direction:row;min-height:0;}
+
+  #motionPanel{
+    width:240px;flex-shrink:0;background:var(--panel);border-left:1px solid var(--panel-line);
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  #motionControls{
+    padding:12px;border-bottom:1px solid var(--panel-line);
+    display:flex;flex-direction:column;gap:10px;font-size:12px;color:var(--muted);
+  }
+  .motion-playmode{display:flex;flex-direction:column;gap:6px;}
+  .motion-playmode label{display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--text);}
+  .motion-interval{display:flex;align-items:center;gap:8px;}
+  .motion-interval input[type=number]{
+    width:64px;background:#1c1c1f;color:#eee;border:1px solid #333;border-radius:6px;
+    padding:6px 8px;font-size:13px;
+  }
+  #motionPlayPauseBtn{width:100%;}
+  #motionList{
+    list-style:none;margin:0;padding:6px;overflow-y:auto;flex:1;
+    display:flex;flex-direction:column;gap:6px;
+  }
+  .motion-item{
+    display:flex;align-items:center;gap:6px;background:#1c1c1f;border:1px solid #2a2a2e;
+    border-radius:8px;padding:6px 8px;font-size:12px;
+  }
+  .motion-item.playing{border-color:var(--accent);background:#1a2433;}
+  .motion-item .motion-name{
+    flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);
+  }
+  .motion-item.playing .motion-name{color:#fff;font-weight:600;}
+  .motion-item-actions{display:flex;gap:2px;flex-shrink:0;}
+  .motion-item-actions button{
+    background:#26262a;color:#eee;border:1px solid #333;border-radius:5px;
+    width:22px;height:22px;font-size:11px;line-height:1;cursor:pointer;padding:0;
+  }
+  .motion-item-actions button:hover:not(:disabled){background:#303036;}
+  .motion-item-actions button:disabled{opacity:.3;cursor:not-allowed;}
+  #motionListEmpty{padding:16px 12px;font-size:12px;color:var(--muted);text-align:center;}
 
   footer{
     padding:10px 16px;background:var(--panel);border-top:1px solid var(--panel-line);
@@ -92,9 +132,7 @@
     <input type="file" id="vrmInput" accept=".vrm" disabled>
 
     <label class="file-btn" for="vrmaInput">VRMAを開く</label>
-    <input type="file" id="vrmaInput" accept=".vrma" disabled>
-
-    <button class="action" id="motionToggleBtn" style="display:none;">⏸ モーション停止</button>
+    <input type="file" id="vrmaInput" accept=".vrma" multiple disabled>
 
     <div class="toggle-wrap">
       <span id="labelFeet" class="label-active">足を中心</span>
@@ -115,11 +153,29 @@
     <span id="status">VRMファイルを選択してください</span>
   </header>
 
-  <main>
-    <button id="fullscreenBtn" title="全画面表示">⛶</button>
-    <canvas id="composite" width="1200" height="1200" style="display:none;"></canvas>
-    <div id="placeholder">VRMファイルを読み込むと<br>前後左右4方向の側面図を十字状に表示します</div>
-  </main>
+  <div id="viewerRow">
+    <main>
+      <button id="fullscreenBtn" title="全画面表示">⛶</button>
+      <canvas id="composite" width="1200" height="1200" style="display:none;"></canvas>
+      <div id="placeholder">VRMファイルを読み込むと<br>前後左右4方向の側面図を十字状に表示します</div>
+    </main>
+
+    <aside id="motionPanel">
+      <div id="motionControls">
+        <div class="motion-playmode">
+          <label><input type="radio" name="playMode" value="loop" checked>🔁 順番にループ</label>
+          <label><input type="radio" name="playMode" value="random">🔀 ランダム</label>
+        </div>
+        <div class="motion-interval">
+          <label for="motionInterval">切替間隔(秒)</label>
+          <input type="number" id="motionInterval" min="0.5" step="0.5" value="5">
+        </div>
+        <button class="action" id="motionPlayPauseBtn" disabled>▶ 再生</button>
+      </div>
+      <ul id="motionList"></ul>
+      <div id="motionListEmpty">モーションが読み込まれていません</div>
+    </aside>
+  </div>
 
   <footer>
     <div id="logPanel"></div>
@@ -196,7 +252,6 @@ const logToggle = document.getElementById('logToggle');
 
 const vrmInput = document.getElementById('vrmInput');
 const vrmaInput = document.getElementById('vrmaInput');
-const motionToggleBtn = document.getElementById('motionToggleBtn');
 const compositeCanvas = document.getElementById('composite');
 const compositeCtx = compositeCanvas.getContext('2d');
 const placeholder = document.getElementById('placeholder');
@@ -207,6 +262,12 @@ const cellSizeSelect = document.getElementById('cellSize');
 const downloadBtn = document.getElementById('downloadBtn');
 const fullscreenBtn = document.getElementById('fullscreenBtn');
 const mainEl = document.querySelector('main');
+
+const motionListEl = document.getElementById('motionList');
+const motionListEmptyEl = document.getElementById('motionListEmpty');
+const motionPlayPauseBtn = document.getElementById('motionPlayPauseBtn');
+const motionIntervalInput = document.getElementById('motionInterval');
+const playModeRadios = document.querySelectorAll('input[name="playMode"]');
 
 function updateFullscreenBtn() {
   const isFs = document.fullscreenElement || document.webkitFullscreenElement;
@@ -368,11 +429,19 @@ let librariesReady = false;
 // ESMライブラリの実体(動的importで取得後にここへ格納する)
 let THREE, GLTFLoader, VRMLoaderPlugin, VRMUtils, VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy;
 
-// ---- VRMAモーション再生 ----
+// ---- VRMAモーション再生ループ(汎用のレンダーループ本体) ----
 let mixer = null;            // THREE.AnimationMixer
-let currentVrmAnimation = null; // 読み込んだVRMAnimation(VRMを差し替えても再利用してリターゲットする)
 let animClock = null;
-let animating = false;
+let animating = false;       // requestAnimationFrameによる毎フレーム再レンダリングが動作中か
+
+// ---- モーションリスト(複数のVRMAを保持し、順番/ランダムで自動切替再生する) ----
+let motionList = [];         // { id, name, vrmAnimation }[]
+let motionIdCounter = 1;
+let currentMotionId = null;  // 現在適用中のモーションのid
+let motionPlayMode = 'loop'; // 'loop' | 'random'
+let motionIntervalSeconds = 5;
+let motionListPlaying = false; // リスト再生(自動切替)が有効か
+let motionAdvanceTimer = null; // 次のモーションへ切り替えるsetTimeoutハンドル
 
 async function loadLibraries() {
   try {
@@ -455,7 +524,8 @@ async function autoLoadDefaultVrma() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const blob = await resp.blob();
     const file = new File([blob], 'VRMA_01.vrma', { type: blob.type || 'application/octet-stream' });
-    await loadVrma(file);
+    const ok = await addMotionFile(file);
+    if (ok) startMotionPlayback();
   } catch (err) {
     log(`デフォルトモーションの自動読み込みをスキップしました(${DEFAULT_VRMA_URL} が見つからないか読み込めません。手動でVRMAを選択してください): ${err && err.message}`);
   }
@@ -491,14 +561,12 @@ function loadGLTF(url) {
   });
 }
 
-// ---- モーション適用/再生ループ ----
+// ---- レンダーループ(mixerとVRMを毎フレーム更新して4方向を再描画する汎用ループ) ----
 function stopAnimationLoop() {
   animating = false;
 }
 
 function startAnimationLoop() {
-  motionToggleBtn.style.display = '';
-  motionToggleBtn.textContent = '⏸ モーション停止';
   if (animating) return;
   animating = true;
   animClock = new THREE.Clock();
@@ -518,29 +586,161 @@ function animationTick() {
   requestAnimationFrame(animationTick);
 }
 
-function applyVrmAnimationToCurrentVrm() {
-  if (!currentVrmAnimation || !currentVrm) return;
-  if (mixer) mixer.stopAllAction();
-  const clip = createVRMAnimationClip(currentVrmAnimation, currentVrm);
-  mixer = new THREE.AnimationMixer(currentVrm.scene);
-  mixer.clipAction(clip).play(); // AnimationActionは既定でLoopRepeat(無限)なのでループ再生になる
-  startAnimationLoop();
+// ---- モーションリストのUI描画 ----
+function renderMotionList() {
+  motionListEl.innerHTML = '';
+  motionListEmptyEl.style.display = motionList.length ? 'none' : 'block';
+
+  motionList.forEach((entry, idx) => {
+    const li = document.createElement('li');
+    li.className = 'motion-item' + (entry.id === currentMotionId ? ' playing' : '');
+
+    const name = document.createElement('span');
+    name.className = 'motion-name';
+    name.textContent = entry.name;
+    name.title = entry.name;
+    li.appendChild(name);
+
+    const actions = document.createElement('div');
+    actions.className = 'motion-item-actions';
+
+    const upBtn = document.createElement('button');
+    upBtn.textContent = '▲';
+    upBtn.title = '上へ移動';
+    upBtn.disabled = idx === 0;
+    upBtn.addEventListener('click', () => moveMotion(idx, -1));
+
+    const downBtn = document.createElement('button');
+    downBtn.textContent = '▼';
+    downBtn.title = '下へ移動';
+    downBtn.disabled = idx === motionList.length - 1;
+    downBtn.addEventListener('click', () => moveMotion(idx, 1));
+
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '✕';
+    delBtn.title = '削除';
+    delBtn.addEventListener('click', () => removeMotion(entry.id));
+
+    actions.appendChild(upBtn);
+    actions.appendChild(downBtn);
+    actions.appendChild(delBtn);
+    li.appendChild(actions);
+
+    motionListEl.appendChild(li);
+  });
+
+  motionPlayPauseBtn.disabled = motionList.length === 0;
 }
 
-async function loadVrma(file) {
+function moveMotion(index, dir) {
+  const newIndex = index + dir;
+  if (newIndex < 0 || newIndex >= motionList.length) return;
+  const [item] = motionList.splice(index, 1);
+  motionList.splice(newIndex, 0, item);
+  renderMotionList();
+}
+
+function removeMotion(id) {
+  const idx = motionList.findIndex((m) => m.id === id);
+  if (idx === -1) return;
+  const wasCurrent = id === currentMotionId;
+  motionList.splice(idx, 1);
+
+  if (motionList.length === 0) {
+    stopMotionPlayback();
+    currentMotionId = null;
+    if (mixer) { mixer.stopAllAction(); mixer = null; }
+    renderMotionList();
+    return;
+  }
+
+  if (wasCurrent && motionListPlaying) {
+    playMotionAtIndex(Math.min(idx, motionList.length - 1));
+  } else {
+    if (wasCurrent) currentMotionId = null;
+    renderMotionList();
+  }
+}
+
+// ---- モーションリストの自動切替再生 ----
+function currentMotionIndex() {
+  return motionList.findIndex((m) => m.id === currentMotionId);
+}
+
+function pickNextIndex(fromIdx) {
+  if (motionPlayMode === 'random') {
+    if (motionList.length === 1) return 0;
+    let idx;
+    do { idx = Math.floor(Math.random() * motionList.length); } while (idx === fromIdx);
+    return idx;
+  }
+  return (fromIdx + 1 + motionList.length) % motionList.length; // loop: 順番に次へ
+}
+
+function clearMotionAdvanceTimer() {
+  if (motionAdvanceTimer) {
+    clearTimeout(motionAdvanceTimer);
+    motionAdvanceTimer = null;
+  }
+}
+
+function scheduleNextAdvance() {
+  clearMotionAdvanceTimer();
+  if (!motionListPlaying || motionList.length < 2) return; // 1件だけならそのままループ再生
+  const ms = Math.max(500, motionIntervalSeconds * 1000);
+  motionAdvanceTimer = setTimeout(() => {
+    const idx = currentMotionIndex();
+    playMotionAtIndex(pickNextIndex(idx === -1 ? 0 : idx));
+  }, ms);
+}
+
+function playMotionAtIndex(index) {
+  const entry = motionList[index];
+  if (!entry || !currentVrm) return;
+  currentMotionId = entry.id;
+
+  if (mixer) mixer.stopAllAction();
+  const clip = createVRMAnimationClip(entry.vrmAnimation, currentVrm);
+  mixer = new THREE.AnimationMixer(currentVrm.scene);
+  mixer.clipAction(clip).play(); // AnimationActionは既定でLoopRepeat(無限)
+
+  startAnimationLoop();
+  renderMotionList();
+  scheduleNextAdvance();
+}
+
+function startMotionPlayback() {
+  if (!motionList.length || !currentVrm) return;
+  motionListPlaying = true;
+  motionPlayPauseBtn.textContent = '⏸ 一時停止';
+
+  let idx = currentMotionIndex();
+  if (idx === -1) {
+    idx = motionPlayMode === 'random' ? Math.floor(Math.random() * motionList.length) : 0;
+  }
+  playMotionAtIndex(idx);
+}
+
+function stopMotionPlayback() {
+  motionListPlaying = false;
+  motionPlayPauseBtn.textContent = '▶ 再生';
+  clearMotionAdvanceTimer();
+  stopAnimationLoop(); // 現在のポーズのまま静止する
+}
+
+// ---- モーションファイルの読み込み ----
+async function addMotionFile(file) {
   if (!librariesReady) {
     log('ライブラリの準備ができていないため読み込めません', true);
-    return;
+    return false;
   }
   if (!currentVrm) {
     log('先にVRMモデルを読み込んでください', true);
     statusEl.textContent = '先にVRMモデルを読み込んでください';
-    return;
+    return false;
   }
 
-  statusEl.textContent = 'モーション読み込み中...';
   const url = URL.createObjectURL(file);
-
   try {
     log(`VRMAファイル選択: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
     const gltf = await loadGLTF(url);
@@ -548,17 +748,29 @@ async function loadVrma(file) {
     if (!vrmAnimations || !vrmAnimations.length) {
       throw new Error('このファイルにVRMAモーションデータが見つかりませんでした');
     }
-    currentVrmAnimation = vrmAnimations[0];
-    applyVrmAnimationToCurrentVrm();
-
-    statusEl.textContent = `モーション再生中: ${file.name}`;
-    log('VRMAモーションの読み込み・適用・ループ再生を開始しました');
+    motionList.push({ id: 'm' + (motionIdCounter++), name: file.name, vrmAnimation: vrmAnimations[0] });
+    renderMotionList();
+    log(`モーションをリストに追加しました: ${file.name}`);
+    return true;
   } catch (err) {
     log('VRMA読み込みエラー: ' + (err && err.message ? err.message : err), true);
-    statusEl.textContent = 'モーションの読み込みに失敗しました。診断ログを確認してください。';
+    return false;
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+async function loadVrmaFiles(fileList) {
+  statusEl.textContent = 'モーション読み込み中...';
+  let successCount = 0;
+  for (const file of fileList) {
+    if (await addMotionFile(file)) successCount++;
+  }
+  statusEl.textContent = successCount > 0
+    ? `モーションを${successCount}件リストに追加しました`
+    : 'モーションの読み込みに失敗しました。診断ログを確認してください。';
+
+  if (successCount > 0 && !motionListPlaying) startMotionPlayback();
 }
 
 async function loadVrm(file) {
@@ -594,7 +806,7 @@ async function loadVrm(file) {
       mixer = null;
     }
     stopAnimationLoop();
-    motionToggleBtn.style.display = 'none';
+    clearMotionAdvanceTimer();
 
     if (currentVrm) {
       scene.remove(currentVrm.scene);
@@ -614,10 +826,15 @@ async function loadVrm(file) {
     compositeCanvas.style.display = 'block';
     downloadBtn.disabled = false;
 
-    if (currentVrmAnimation) {
-      // 既に読み込み済みのモーションがあれば、新しいモデルにも再適用(リターゲット)する
-      applyVrmAnimationToCurrentVrm();
-      statusEl.textContent = `読み込み完了: ${file.name}(モーション再生中)`;
+    if (motionList.length) {
+      // 既存のモーションリストがあれば、新しいモデルに合わせてリターゲットして引き続き再生する
+      if (motionListPlaying && currentMotionId) {
+        const idx = currentMotionIndex();
+        if (idx !== -1) playMotionAtIndex(idx);
+      } else {
+        renderMotionList();
+      }
+      statusEl.textContent = `読み込み完了: ${file.name}(モーション${motionList.length}件)`;
     } else {
       statusEl.textContent = `読み込み完了: ${file.name}`;
     }
@@ -742,17 +959,31 @@ vrmInput.addEventListener('change', (e) => {
 });
 
 vrmaInput.addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  if (file) loadVrma(file);
+  const files = [...e.target.files];
+  if (files.length) loadVrmaFiles(files);
+  vrmaInput.value = ''; // 同じファイルを続けて選択できるようにリセット
 });
 
-motionToggleBtn.addEventListener('click', () => {
-  if (animating) {
-    stopAnimationLoop();
-    motionToggleBtn.textContent = '▶ モーション再開';
-  } else if (currentVrmAnimation) {
-    startAnimationLoop();
+motionPlayPauseBtn.addEventListener('click', () => {
+  if (motionListPlaying) {
+    stopMotionPlayback();
+  } else {
+    startMotionPlayback();
   }
+});
+
+playModeRadios.forEach((radio) => {
+  radio.addEventListener('change', (e) => {
+    if (e.target.checked) motionPlayMode = e.target.value;
+    if (motionListPlaying) scheduleNextAdvance();
+  });
+});
+
+motionIntervalInput.addEventListener('change', () => {
+  const v = parseFloat(motionIntervalInput.value);
+  motionIntervalSeconds = (!isFinite(v) || v <= 0) ? 5 : v;
+  motionIntervalInput.value = motionIntervalSeconds;
+  if (motionListPlaying) scheduleNextAdvance();
 });
 
 centerSwitch.addEventListener('click', () => {
