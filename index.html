@@ -328,6 +328,46 @@ const ROTATION_SENSITIVITY = Math.PI / 300; // 1pxあたりの回転量(300px≒
 
 let vDragStart = null; // { x, y, armRatio, rotationY, displayScale }
 
+// ---- 中心の黒正方形(選択して移動・拡大縮小できる) ----
+let squareSelected = false;
+let squareSize = 80;               // 正方形の一辺(コンポジットcanvasのピクセル空間)
+let squareOffsetX = 0, squareOffsetY = 0; // canvas中心からの正方形のオフセット(=十字の収束点も追随する)
+const SQUARE_SIZE_MIN = 10;
+const SQUARE_SIZE_MAX = 3000;
+let sqDragStart = null;            // { x, y, offsetX, offsetY, displayScale }
+let pinchStartSquareSize = 80;
+let tapStart = null;               // { x, y, time, moved } タップ判定用
+const TAP_MOVE_THRESHOLD = 8;      // px(mainEl CSS空間)
+const TAP_MAX_DURATION = 500;      // ms
+
+function getCompositeLayout() {
+  const S = cellSize;
+  const armDistance = S * armRatio;
+  const half = armDistance + S / 2;
+  const canvasSize = Math.max(S, Math.round(half * 2));
+  return {
+    canvasSize,
+    centerX: canvasSize / 2 + squareOffsetX,
+    centerY: canvasSize / 2 + squareOffsetY,
+  };
+}
+
+function localPointFromEvent(e) {
+  const rect = compositeCanvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
+  return {
+    x: (e.clientX - rect.left) * (compositeCanvas.width / rect.width),
+    y: (e.clientY - rect.top) * (compositeCanvas.height / rect.height),
+  };
+}
+
+function isPointInSquare(localX, localY) {
+  const { centerX, centerY } = getCompositeLayout();
+  const half = squareSize / 2;
+  return localX >= centerX - half && localX <= centerX + half &&
+         localY >= centerY - half && localY <= centerY + half;
+}
+
 compositeCanvas.style.touchAction = 'none';
 
 function pointFromEvent(e) {
@@ -343,12 +383,22 @@ compositeCanvas.addEventListener('pointerdown', (e) => {
     const pts = [...activePointers.values()];
     pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
     pinchStartZoom = viewZoom;
+    pinchStartSquareSize = squareSize;
     vDragStart = null;
+    sqDragStart = null;
+    tapStart = null;
   } else if (activePointers.size === 1) {
     const p = pointFromEvent(e);
+    tapStart = { x: p.x, y: p.y, time: Date.now(), moved: false };
     const rect = compositeCanvas.getBoundingClientRect();
     const displayScale = rect.width > 0 ? (compositeCanvas.width / rect.width) : 1;
-    vDragStart = { x: p.x, y: p.y, armRatio, rotationY, displayScale };
+    if (squareSelected) {
+      sqDragStart = { x: p.x, y: p.y, offsetX: squareOffsetX, offsetY: squareOffsetY, displayScale };
+      vDragStart = null;
+    } else {
+      vDragStart = { x: p.x, y: p.y, armRatio, rotationY, displayScale };
+      sqDragStart = null;
+    }
   }
 });
 
@@ -359,34 +409,61 @@ compositeCanvas.addEventListener('pointermove', (e) => {
   if (activePointers.size === 2) {
     const pts = [...activePointers.values()];
     const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-    const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, pinchStartZoom * (dist / pinchStartDist)));
-    if (newZoom !== viewZoom) {
-      viewZoom = newZoom;
-      scheduleRender();
+    if (squareSelected) {
+      const newSize = Math.min(SQUARE_SIZE_MAX, Math.max(SQUARE_SIZE_MIN, pinchStartSquareSize * (dist / pinchStartDist)));
+      if (newSize !== squareSize) {
+        squareSize = newSize;
+        drawComposite();
+      }
+    } else {
+      const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, pinchStartZoom * (dist / pinchStartDist)));
+      if (newZoom !== viewZoom) {
+        viewZoom = newZoom;
+        scheduleRender();
+      }
     }
-  } else if (activePointers.size === 1 && vDragStart) {
+  } else if (activePointers.size === 1) {
     const p = [...activePointers.values()][0];
-    const dx = (p.x - vDragStart.x) * vDragStart.displayScale;
-    const dy = (p.y - vDragStart.y) * vDragStart.displayScale;
 
-    // 左右にスワイプするとモデルの体軸(Y軸)を基準にカメラが回転し、再レンダリングされる
-    const newRotationY = vDragStart.rotationY + dx * ROTATION_SENSITIVITY;
-    const rotationChanged = newRotationY !== rotationY;
-    if (rotationChanged) rotationY = newRotationY;
+    if (tapStart && !tapStart.moved &&
+        (Math.abs(p.x - tapStart.x) > TAP_MOVE_THRESHOLD || Math.abs(p.y - tapStart.y) > TAP_MOVE_THRESHOLD)) {
+      tapStart.moved = true;
+    }
 
-    // 上にスワイプ(dyが負)すると中心からの距離が増え、下にスワイプすると縮まる
-    const newRatio = Math.min(
-      ARM_RATIO_MAX,
-      Math.max(ARM_RATIO_MIN, vDragStart.armRatio - dy / cellSize)
-    );
-    const ratioChanged = newRatio !== armRatio;
-    if (ratioChanged) armRatio = newRatio;
+    if (squareSelected && sqDragStart) {
+      // ドラッグで黒正方形を移動(十字の収束点も一緒に追随する)
+      const dx = (p.x - sqDragStart.x) * sqDragStart.displayScale;
+      const dy = (p.y - sqDragStart.y) * sqDragStart.displayScale;
+      const newOffsetX = sqDragStart.offsetX + dx;
+      const newOffsetY = sqDragStart.offsetY + dy;
+      if (newOffsetX !== squareOffsetX || newOffsetY !== squareOffsetY) {
+        squareOffsetX = newOffsetX;
+        squareOffsetY = newOffsetY;
+        drawComposite();
+      }
+    } else if (!squareSelected && vDragStart) {
+      const dx = (p.x - vDragStart.x) * vDragStart.displayScale;
+      const dy = (p.y - vDragStart.y) * vDragStart.displayScale;
 
-    if (rotationChanged) {
-      // カメラ回転は3D再レンダリングを伴うためrAFでスケジューリングする(drawCompositeも内部で実行される)
-      scheduleRender();
-    } else if (ratioChanged) {
-      drawComposite();
+      // 左右にスワイプするとモデルの体軸(Y軸)を基準にカメラが回転し、再レンダリングされる
+      const newRotationY = vDragStart.rotationY + dx * ROTATION_SENSITIVITY;
+      const rotationChanged = newRotationY !== rotationY;
+      if (rotationChanged) rotationY = newRotationY;
+
+      // 上にスワイプ(dyが負)すると中心からの距離が増え、下にスワイプすると縮まる
+      const newRatio = Math.min(
+        ARM_RATIO_MAX,
+        Math.max(ARM_RATIO_MIN, vDragStart.armRatio - dy / cellSize)
+      );
+      const ratioChanged = newRatio !== armRatio;
+      if (ratioChanged) armRatio = newRatio;
+
+      if (rotationChanged) {
+        // カメラ回転は3D再レンダリングを伴うためrAFでスケジューリングする(drawCompositeも内部で実行される)
+        scheduleRender();
+      } else if (ratioChanged) {
+        drawComposite();
+      }
     }
   }
 });
@@ -397,9 +474,31 @@ function endPointer(e) {
     const p = [...activePointers.values()][0];
     const rect = compositeCanvas.getBoundingClientRect();
     const displayScale = rect.width > 0 ? (compositeCanvas.width / rect.width) : 1;
-    vDragStart = { x: p.x, y: p.y, armRatio, rotationY, displayScale };
+    if (squareSelected) {
+      sqDragStart = { x: p.x, y: p.y, offsetX: squareOffsetX, offsetY: squareOffsetY, displayScale };
+      vDragStart = null;
+    } else {
+      vDragStart = { x: p.x, y: p.y, armRatio, rotationY, displayScale };
+      sqDragStart = null;
+    }
+    tapStart = null; // ピンチ経由での指1本残しはタップ扱いにしない
   } else if (activePointers.size === 0) {
     vDragStart = null;
+    sqDragStart = null;
+
+    // タップ判定: 黒正方形の選択/選択解除
+    if (tapStart && !tapStart.moved && (Date.now() - tapStart.time) < TAP_MAX_DURATION) {
+      const local = localPointFromEvent(e);
+      const hit = isPointInSquare(local.x, local.y);
+      if (hit && !squareSelected) {
+        squareSelected = true;
+        drawComposite();
+      } else if (!hit && squareSelected) {
+        squareSelected = false;
+        drawComposite();
+      }
+    }
+    tapStart = null;
 
     if (e.pointerType === 'touch') {
       const now = Date.now();
@@ -818,6 +917,9 @@ async function loadVrm(file) {
 
     statusEl.textContent = 'レンダリング中...';
     rotationY = 0;
+    squareOffsetX = 0;
+    squareOffsetY = 0;
+    squareSelected = false;
     renderAllViews();
     drawComposite();
     resetZoom();
@@ -916,8 +1018,8 @@ function drawComposite() {
   compositeCtx.fillStyle = '#000';
   compositeCtx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
 
-  const centerX = canvasSize / 2;
-  const centerY = canvasSize / 2;
+  const centerX = canvasSize / 2 + squareOffsetX;
+  const centerY = canvasSize / 2 + squareOffsetY;
 
   const deg = (d) => (d * Math.PI) / 180;
   const feetCenter = mode === 'feet';
@@ -951,6 +1053,23 @@ function drawComposite() {
     compositeCtx.drawImage(slot.img, -S / 2, -S / 2, S, S);
     compositeCtx.restore();
   }
+
+  // 中心の黒正方形(最前面。タップで選択→ピンチで拡大縮小、スワイプで移動できる)
+  compositeCtx.save();
+  compositeCtx.fillStyle = '#000';
+  compositeCtx.fillRect(centerX - squareSize / 2, centerY - squareSize / 2, squareSize, squareSize);
+  if (squareSelected) {
+    const lw = Math.max(2, squareSize * 0.04);
+    compositeCtx.strokeStyle = '#5b9dff';
+    compositeCtx.lineWidth = lw;
+    compositeCtx.strokeRect(
+      centerX - squareSize / 2 + lw / 2,
+      centerY - squareSize / 2 + lw / 2,
+      squareSize - lw,
+      squareSize - lw
+    );
+  }
+  compositeCtx.restore();
 }
 
 vrmInput.addEventListener('change', (e) => {
